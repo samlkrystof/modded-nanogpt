@@ -434,20 +434,44 @@ def _load_data_shard(file: Path):
         assert nbytes == 2 * num_tokens, "number of tokens read does not match header"
     return tokens
 
-def distributed_data_generator(filename_pattern: str, batch_size: int, rank : int, world_size : int):
-    files = sorted(Path.cwd().glob(filename_pattern))
-    assert batch_size % world_size == 0
-    local_batch_size = batch_size // world_size
-    file_iter = iter(files) # use itertools.cycle(files) instead if you want to do multi-epoch training
-    tokens, pos = _load_data_shard(next(file_iter)), 0
-    while True:
-        if pos + batch_size + 1 >= len(tokens):
-            tokens, pos = _load_data_shard(next(file_iter)), 0
-        buf = tokens[pos + rank * local_batch_size:][:local_batch_size + 1]
-        inputs = buf[:-1].to(device="cuda", dtype=torch.int32, non_blocking=True) # no sync on host side;
-        targets = buf[1:].to(device="cuda", dtype=torch.int64, non_blocking=True) # H2D in another stream isn"t helpful.
-        pos += batch_size
-        yield inputs, targets
+class DistributedDataLoader:
+    """Distributed data loader for loading training data across multiple GPUs."""
+    
+    def __init__(self, filename_pattern: str, rank: int, world_size: int):
+        """Initialize the data loader.
+        
+        Args:
+            filename_pattern: Pattern to match data files
+            rank: Process rank in distributed training
+            world_size: Total number of processes
+        """
+        self.files = sorted(Path.cwd().glob(filename_pattern))
+        self.rank = rank
+        self.world_size = world_size
+        self.file_iter = iter(self.files)
+        self.tokens, self.pos = _load_data_shard(next(self.file_iter)), 0
+
+    def next_batch(self, batch_size: int) -> tuple[torch.Tensor, torch.Tensor]:
+        """Get next batch of data.
+        
+        Args:
+            batch_size: Total batch size across all processes
+            
+        Returns:
+            Tuple of (input_tokens, target_tokens)
+        """
+        assert batch_size % self.world_size == 0
+        local_batch_size = batch_size // self.world_size
+        
+        if self.pos + batch_size + 1 >= len(self.tokens):
+            self.tokens, self.pos = _load_data_shard(next(self.file_iter)), 0
+            
+        buf = self.tokens[self.pos + self.rank * local_batch_size:][:local_batch_size + 1]
+        inputs = buf[:-1].to(device="cuda", dtype=torch.int32, non_blocking=True)
+        targets = buf[1:].to(device="cuda", dtype=torch.int64, non_blocking=True)
+        self.pos += batch_size
+        
+        return inputs, targets
 
 # -----------------------------------------------------------------------------
 # int main
@@ -506,7 +530,7 @@ print0(nvidia_smi())
 print0("="*100)
 
 # load data
-train_loader = distributed_data_generator(args.train_files, args.batch_size, rank, world_size)
+train_loader = DistributedDataLoader(args.train_files, rank, world_size)
 
 model = GPT(vocab_size=50257, num_layers=12, num_heads=6, model_dim=768).cuda()
 for m in model.modules():
@@ -535,7 +559,12 @@ def get_lr(it: int):
     assert 1 >= t >= 0
     w = min(t / args.cooldown_frac, 1.0) # 1 -> 0
     return w * 1.0 + (1 - w) * 0.1
-schedulers = [torch.optim.lr_scheduler.LambdaLR(opt, get_lr) for opt in optimizers]
+
+def get_batch_size(it: int):
+    w = get_lr(it)
+    return (args.batch_size / w) // args.batch_size * args.batch_size
+
+# schedulers = [torch.optim.lr_scheduler.LambdaLR(opt, get_lr) for opt in optimizers]
 @lru_cache(1)
 def sw_num_blks(window_size: int):
     return torch.tensor(window_size // 128, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
@@ -569,11 +598,11 @@ for step in range(train_steps + 1):
         val_bs = world_size * args.seq_len
         assert args.val_tokens % val_bs == 0
         val_steps = args.val_tokens // val_bs
-        val_loader = distributed_data_generator(args.val_files, val_bs, rank, world_size)
+        val_loader = DistributedDataLoader(args.val_files, rank, world_size)
         val_loss = 0
         with torch.no_grad():
             for _ in range(val_steps):
-                x, y = next(val_loader)
+                x, y = val_loader.next_batch(val_bs)
                 val_loss += model(x, y, sw_num_blks(window_size))
         val_loss /= val_steps
         del val_loader
@@ -593,7 +622,7 @@ for step in range(train_steps + 1):
         break
 
     # --------------- TRAINING SECTION BEGIN -----------------
-    inputs, targets = next(train_loader)
+    inputs, targets = train_loader.next_batch(get_batch_size(step))
     for input_seq, target_seq in zip(inputs.split(args.seq_len), targets.split(args.seq_len)):
         model(input_seq, target_seq, sw_num_blks(window_size)).backward()
     for param in model.parameters():
@@ -603,9 +632,10 @@ for step in range(train_steps + 1):
     for group in optimizer2.param_groups:
         group["momentum"] = (1 - frac) * 0.85 + frac * 0.95
     # step the optimizers and schedulers
-    for opt, sched in zip(optimizers, schedulers):
+    # for opt, sched in zip(optimizers, schedulers):
+    for opt in optimizers:
         opt.step()
-        sched.step()
+        # sched.step()
     # null the gradients
     model.zero_grad(set_to_none=True)
     # logging
