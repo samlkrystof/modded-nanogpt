@@ -76,7 +76,7 @@ def test_tensor_product_dimensions() -> None:
     ]
     
     for config in test_configs:
-        model = TensorProductAttention(max_seq_len=2048, **config)
+        model = TensorProductAttention(max_seq_len=32768, **config)
         x = torch.randn(2, 32, config["d_model"])
         output = model(x)
         assert output.shape == x.shape, \

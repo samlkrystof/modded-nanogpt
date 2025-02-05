@@ -127,7 +127,6 @@ class MultiheadFlashDiff(nn.Module):
             seqlen_offsets=0,
         )
 
-        offset = src_len - tgt_len
         q = q.reshape(bsz, tgt_len, self.num_heads, 2, self.head_dim)
         k = k.reshape(bsz, src_len, self.num_heads, 2, self.head_dim)
         q1, q2 = q[:, :, :, 0], q[:, :, :, 1]

@@ -31,13 +31,14 @@ class MultiheadLatentAttention(nn.Module):
         self.d_model = d_model
         self.n_heads = n_heads
         self.head_dim = d_model // n_heads
+        assert rope_dim <= self.head_dim, "rotary_dim must be <= head_dim"
         self.kv_dim = kv_dim
         self.q_dim = q_dim
         self.rope_dim = rope_dim
         self.max_seq_len = max_seq_len
 
         self.rope_key = nn.Linear(d_model, rope_dim)
-        self.rope_query = nn.Linear(q_dim, rope_dim)
+        self.rope_query = nn.Linear(q_dim, rope_dim * n_heads)
 
         self.down_kv = nn.Linear(d_model, kv_dim)
         self.down_query = nn.Linear(d_model, q_dim)
