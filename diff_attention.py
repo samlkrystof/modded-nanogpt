@@ -134,8 +134,8 @@ class MultiheadFlashDiff(nn.Module):
         attn1 = flash_attn_func(q1, k1, v, causal=True)
         attn2 = flash_attn_func(q2, k2, v, causal=True)
         
-        lambda_1 = torch.exp(torch.sum(self.lambda_q1 * self.lambda_k1, dim=-1))
-        lambda_2 = torch.exp(torch.sum(self.lambda_q2 * self.lambda_k2, dim=-1))
+        lambda_1 = torch.exp(torch.dot(self.lambda_q1, self.lambda_k1))
+        lambda_2 = torch.exp(torch.dot(self.lambda_q2, self.lambda_k2))
         lambda_full = lambda_1 - lambda_2 + self.lambda_init
         attn = attn1 - lambda_full * attn2
 
