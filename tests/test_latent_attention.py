@@ -58,7 +58,7 @@ def test_latent_attention_device_transfer(device: str) -> None:
         n_heads=8,
         kv_dim=256,
         q_dim=256,
-        rope_dim=32
+        rope_dim=16
     )
     x = torch.randn(2, 32, 512)
     
@@ -71,9 +71,9 @@ def test_latent_attention_device_transfer(device: str) -> None:
 def test_latent_attention_dimensions() -> None:
     """Test if different dimension configurations are handled correctly"""
     test_configs = [
-        {"d_model": 512, "n_heads": 8, "kv_dim": 256, "q_dim": 256, "rope_dim": 32},
-        {"d_model": 768, "n_heads": 12, "kv_dim": 384, "q_dim": 384, "rope_dim": 64},
-        {"d_model": 1024, "n_heads": 16, "kv_dim": 512, "q_dim": 512, "rope_dim": 128},
+        {"d_model": 512, "n_heads": 8, "kv_dim": 256, "q_dim": 256, "rope_dim": 16},
+        {"d_model": 768, "n_heads": 12, "kv_dim": 384, "q_dim": 384, "rope_dim": 32},
+        {"d_model": 1024, "n_heads": 16, "kv_dim": 512, "q_dim": 512, "rope_dim": 64},
     ]
     
     for config in test_configs:

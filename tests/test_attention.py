@@ -53,7 +53,7 @@ class TestAttentionModules:
                     "n_heads": 8,
                     "kv_dim": 256,
                     "q_dim": 256,
-                    "rope_dim": 32,
+                    "rope_dim": 16,
                     "max_seq_len": 2048
                 }
             )
@@ -97,7 +97,7 @@ class TestAttentionModules:
                     "n_heads": 8,
                     "kv_dim": 256,
                     "q_dim": 256,
-                    "rope_dim": 32,
+                    "rope_dim": 16,
                     "max_seq_len": 2048
                 }
             )
@@ -143,7 +143,7 @@ class TestAttentionModules:
                     "n_heads": 8,
                     "kv_dim": 256,
                     "q_dim": 256,
-                    "rope_dim": 32,
+                    "rope_dim": 16,
                     "max_seq_len": 2048
                 }
             )
@@ -188,7 +188,7 @@ class TestAttentionModules:
                     "n_heads": 8,
                     "kv_dim": 256,
                     "q_dim": 256,
-                    "rope_dim": 32,
+                    "rope_dim": 16,
                     "max_seq_len": 2048
                 }
             )
@@ -239,7 +239,7 @@ def test_latent_attention_dimensions() -> None:
         n_heads=8,
         kv_dim=256,
         q_dim=256,
-        rope_dim=32
+        rope_dim=16
     )
     
     # Test if the model properly handles the dimension reduction and expansion
