@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from .rotary import apply_rotary_emb
+import math
 
 def precompute_rotary_emb(max_seq_len: int, dim: int, device: str = "cuda") -> tuple[torch.Tensor, torch.Tensor]:
     """
