@@ -471,7 +471,7 @@ def _load_data_shard(file: Path):
         assert nbytes == 2 * num_tokens, "number of tokens read does not match header"
     return tokens
 
-def distributed_data_generator(filename_pattern: str, batch_size: int, rank : int, world_size : int):
+def distributed_data_generator(filename_pattern: str, batch_size: int, rank : int, world_size : int, seq_len: int = 2048):
     files = sorted(Path.cwd().glob(filename_pattern))
     assert batch_size % world_size == 0
     local_batch_size = batch_size // world_size
@@ -481,8 +481,11 @@ def distributed_data_generator(filename_pattern: str, batch_size: int, rank : in
         if pos + batch_size + 1 >= len(tokens):
             tokens, pos = _load_data_shard(next(file_iter)), 0
         buf = tokens[pos + rank * local_batch_size:][:local_batch_size + 1]
-        inputs = buf[:-1].to(device="cuda", dtype=torch.int32, non_blocking=True) # no sync on host side;
-        targets = buf[1:].to(device="cuda", dtype=torch.int64, non_blocking=True) # H2D in another stream isn"t helpful.
+        # Reshape inputs and targets to (B, S) where B is batch size and S is sequence length
+        inputs = buf[:-1].view(local_batch_size // seq_len, seq_len)  # Reshape to (local_batch_size, seq_len)
+        targets = buf[1:].view(local_batch_size // seq_len, seq_len)  # Reshape to (local_batch_size, seq_len)
+        inputs = inputs.to(device="cuda", dtype=torch.int32, non_blocking=True) # no sync on host side;
+        targets = targets.to(device="cuda", dtype=torch.int64, non_blocking=True) # H2D in another stream isn"t helpful.
         pos += batch_size
         yield inputs, targets
 
@@ -543,7 +546,7 @@ print0(nvidia_smi())
 print0("="*100)
 
 # load data
-train_loader = distributed_data_generator(args.train_files, args.batch_size, rank, world_size)
+train_loader = distributed_data_generator(args.train_files, args.batch_size, rank, world_size, args.seq_len)
 
 model = GPT(vocab_size=50257, num_layers=12, num_heads=6, model_dim=768).cuda()
 for m in model.modules():
@@ -606,7 +609,7 @@ for step in range(train_steps + 1):
         val_bs = world_size * args.seq_len
         assert args.val_tokens % val_bs == 0
         val_steps = args.val_tokens // val_bs
-        val_loader = distributed_data_generator(args.val_files, val_bs, rank, world_size)
+        val_loader = distributed_data_generator(args.val_files, val_bs, rank, world_size, args.seq_len)
         val_loss = 0
         with torch.no_grad():
             for _ in range(val_steps):
@@ -631,8 +634,7 @@ for step in range(train_steps + 1):
 
     # --------------- TRAINING SECTION BEGIN -----------------
     inputs, targets = next(train_loader)
-    for input_seq, target_seq in zip(inputs.split(args.seq_len), targets.split(args.seq_len)):
-        model(input_seq, target_seq).backward()  # Pass None instead of sw_num_blks
+    model(inputs, targets).backward()  # Pass None instead of sw_num_blks
     for param in model.parameters():
         dist.all_reduce(param.grad, op=dist.ReduceOp.AVG)
     # momentum warmup for Muon
