@@ -28,7 +28,7 @@ def precompute_rotary_emb(max_seq_len: int, dim: int, device: str = "cuda") -> t
     return cos, sin
 
 class TensorProductAttention(nn.Module):
-    def __init__(self, d_model: int, n_heads: int, q_rank: int, kv_rank: int, max_seq_len: int):
+    def __init__(self, d_model: int, n_heads: int, q_rank: int, k_rank: int, v_rank : int, max_seq_len: int):
         super().__init__()
         assert d_model % n_heads == 0, "d_model must be divisible by n_heads"
         self.d_model = d_model
@@ -36,16 +36,17 @@ class TensorProductAttention(nn.Module):
         self.head_dim = d_model // n_heads
 
         self.q_rank = q_rank
-        self.kv_rank = kv_rank
+        self.k_rank = k_rank
+        self.v_rank = v_rank
 
         self.aq_proj = nn.Linear(d_model, q_rank * n_heads)
         self.bq_proj = nn.Linear(d_model, q_rank * self.head_dim)
 
-        self.ak_proj = nn.Linear(d_model, kv_rank * n_heads)
-        self.bk_proj = nn.Linear(d_model, kv_rank * self.head_dim)
+        self.ak_proj = nn.Linear(d_model, k_rank * n_heads)
+        self.bk_proj = nn.Linear(d_model, k_rank * self.head_dim)
 
-        self.av_proj = nn.Linear(d_model, kv_rank * n_heads)
-        self.bv_proj = nn.Linear(d_model, kv_rank * self.head_dim)
+        self.av_proj = nn.Linear(d_model, v_rank * n_heads)
+        self.bv_proj = nn.Linear(d_model, v_rank * self.head_dim)
 
         self.out_proj = nn.Linear(d_model, d_model)
 
@@ -53,8 +54,8 @@ class TensorProductAttention(nn.Module):
 
     def _init_weights(self):
         aq_tensor = self.aq_proj.weight.view(self.d_model, self.n_heads, self.q_rank)
-        ak_tensor = self.ak_proj.weight.view(self.d_model, self.n_heads, self.kv_rank)
-        av_tensor = self.av_proj.weight.view(self.d_model, self.n_heads, self.kv_rank)
+        ak_tensor = self.ak_proj.weight.view(self.d_model, self.n_heads, self.k_rank)
+        av_tensor = self.av_proj.weight.view(self.d_model, self.n_heads, self.v_rank)
         nn.init.xavier_uniform_(aq_tensor)
         nn.init.xavier_uniform_(ak_tensor)
         nn.init.xavier_uniform_(av_tensor)
@@ -63,8 +64,8 @@ class TensorProductAttention(nn.Module):
         self.av_proj.weight.data = av_tensor.view_as(self.av_proj.weight)
 
         bq_tensor = self.bq_proj.weight.view(self.d_model, self.q_rank, self.head_dim)
-        bk_tensor = self.bk_proj.weight.view(self.d_model, self.kv_rank, self.head_dim)
-        bv_tensor = self.bv_proj.weight.view(self.d_model, self.kv_rank, self.head_dim)
+        bk_tensor = self.bk_proj.weight.view(self.d_model, self.k_rank, self.head_dim)
+        bv_tensor = self.bv_proj.weight.view(self.d_model, self.v_rank, self.head_dim)
         nn.init.xavier_uniform_(bq_tensor)
         nn.init.xavier_uniform_(bk_tensor)
         nn.init.xavier_uniform_(bv_tensor)
@@ -77,12 +78,12 @@ class TensorProductAttention(nn.Module):
         batch_size, seq_len, d_model = x.size()
 
         a_q = self.aq_proj(x).view(batch_size, seq_len, self.n_heads, self.q_rank)
-        a_k = self.ak_proj(x).view(batch_size, seq_len, self.n_heads, self.kv_rank)
-        a_v = self.av_proj(x).view(batch_size, seq_len, self.n_heads, self.kv_rank)
+        a_k = self.ak_proj(x).view(batch_size, seq_len, self.n_heads, self.k_rank)
+        a_v = self.av_proj(x).view(batch_size, seq_len, self.n_heads, self.v_rank)
 
         b_q = self.bq_proj(x).view(batch_size, seq_len, self.q_rank, self.head_dim)
-        b_k = self.bk_proj(x).view(batch_size, seq_len, self.kv_rank, self.head_dim)
-        b_v = self.bv_proj(x).view(batch_size, seq_len, self.kv_rank, self.head_dim)
+        b_k = self.bk_proj(x).view(batch_size, seq_len, self.k_rank, self.head_dim)
+        b_v = self.bv_proj(x).view(batch_size, seq_len, self.v_rank, self.head_dim)
 
         b_q = apply_rotary_emb(b_q, self.cos, self.sin, interleaved=True, inplace=False, seqlen_offsets=0)
         b_k = apply_rotary_emb(b_k, self.cos, self.sin, interleaved=True, inplace=False, seqlen_offsets=0)

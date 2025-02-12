@@ -255,15 +255,16 @@ class Rotary(nn.Module):
         return torch.cat((y1, y2), 3).type_as(x_BTHD)
 
 class CausalSelfAttention(nn.Module):
-    def __init__(self, dim: int, num_heads: int, layer_idx: int):
+    def __init__(self, dim: int, num_heads: int, layer_idx: int, q_rank: int = 6, k_rank: int = 2, v_rank: int = 2):
         super().__init__()
         assert dim % num_heads == 0
         self.num_heads = num_heads
         self.head_dim = dim // num_heads
         
         # TPA ranks - can be tuned
-        self.q_rank = 32  # Reduced rank for queries
-        self.kv_rank = 32  # Reduced rank for keys/values
+        self.q_rank = q_rank  # Reduced rank for queries
+        self.k_rank = k_rank  # Reduced rank for keys
+        self.v_rank = v_rank
         
         # TPA projections
         std = 0.5 * (dim ** -0.5)
@@ -274,12 +275,12 @@ class CausalSelfAttention(nn.Module):
         self.bq_proj = CastedLinear(dim, self.q_rank * self.head_dim)
         
         # Key projections
-        self.ak_proj = CastedLinear(dim, self.kv_rank * num_heads)
-        self.bk_proj = CastedLinear(dim, self.kv_rank * self.head_dim)
+        self.ak_proj = CastedLinear(dim, self.k_rank * num_heads)
+        self.bk_proj = CastedLinear(dim, self.k_rank * self.head_dim)
         
         # Value projections
-        self.av_proj = CastedLinear(dim, self.kv_rank * num_heads)
-        self.bv_proj = CastedLinear(dim, self.kv_rank * self.head_dim)
+        self.av_proj = CastedLinear(dim, self.v_rank * num_heads)
+        self.bv_proj = CastedLinear(dim, self.v_rank * self.head_dim)
         
         # Output projection
         self.c_proj = CastedLinear(dim, dim)
@@ -301,14 +302,14 @@ class CausalSelfAttention(nn.Module):
         nn.init.xavier_uniform_(bq_tensor)
         
         # Initialize key projections
-        ak_tensor = self.ak_proj.weight.view(self.kv_rank * self.num_heads, -1)
-        bk_tensor = self.bk_proj.weight.view(self.kv_rank * self.head_dim, -1)
+        ak_tensor = self.ak_proj.weight.view(self.k_rank * self.num_heads, -1)
+        bk_tensor = self.bk_proj.weight.view(self.k_rank * self.head_dim, -1)
         nn.init.xavier_uniform_(ak_tensor)
         nn.init.xavier_uniform_(bk_tensor)
         
         # Initialize value projections
-        av_tensor = self.av_proj.weight.view(self.kv_rank * self.num_heads, -1)
-        bv_tensor = self.bv_proj.weight.view(self.kv_rank * self.head_dim, -1)
+        av_tensor = self.av_proj.weight.view(self.v_rank * self.num_heads, -1)
+        bv_tensor = self.bv_proj.weight.view(self.v_rank * self.head_dim, -1)
         nn.init.xavier_uniform_(av_tensor)
         nn.init.xavier_uniform_(bv_tensor)
 
@@ -317,16 +318,16 @@ class CausalSelfAttention(nn.Module):
         
         # TPA projections
         a_q = self.aq_proj(x).view(B, T, self.num_heads, self.q_rank)
-        a_k = self.ak_proj(x).view(B, T, self.num_heads, self.kv_rank)
-        a_v = self.av_proj(x).view(B, T, self.num_heads, self.kv_rank)
+        a_k = self.ak_proj(x).view(B, T, self.num_heads, self.k_rank)
+        a_v = self.av_proj(x).view(B, T, self.num_heads, self.v_rank)
         
         b_q = self.bq_proj(x).view(B, T, self.q_rank, self.head_dim)
-        b_k = self.bk_proj(x).view(B, T, self.kv_rank, self.head_dim)
-        b_v = self.bv_proj(x).view(B, T, self.kv_rank, self.head_dim)
+        b_k = self.bk_proj(x).view(B, T, self.k_rank, self.head_dim)
+        b_v = self.bv_proj(x).view(B, T, self.v_rank, self.head_dim)
         
         # Apply rotary embeddings using existing implementation
         b_q = self.rotary(b_q.view(B, T, -1, self.head_dim)).view(B, T, self.q_rank, self.head_dim)
-        b_k = self.rotary(b_k.view(B, T, -1, self.head_dim)).view(B, T, self.kv_rank, self.head_dim)
+        b_k = self.rotary(b_k.view(B, T, -1, self.head_dim)).view(B, T, self.k_rank, self.head_dim)
         
         # Compute QKV through tensor products
         q = norm(a_q @ b_q)  # Keep QK norm from existing implementation
