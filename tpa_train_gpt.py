@@ -292,27 +292,31 @@ class CausalSelfAttention(nn.Module):
         self.attn_scale = 0.12  # Keep custom scale
 
         # Initialize weights using Xavier uniform
-        self._init_weights()
+        self._init_weights(dim)
 
-    def _init_weights(self):
-        # Initialize query projections
-        aq_tensor = self.aq_proj.weight.view(self.q_rank * self.num_heads, -1)
-        bq_tensor = self.bq_proj.weight.view(self.q_rank * self.head_dim, -1)
+    def _init_weights(self, dim: int) -> None:
+        # Initialize tensor product weights using Xavier uniform with proper reshaping
+        aq_tensor = self.aq_proj.weight.view(dim, self.num_heads, self.q_rank)
+        ak_tensor = self.ak_proj.weight.view(dim, self.num_heads, self.kv_rank)
+        av_tensor = self.av_proj.weight.view(dim, self.num_heads, self.kv_rank)
         nn.init.xavier_uniform_(aq_tensor)
-        nn.init.xavier_uniform_(bq_tensor)
-        
-        # Initialize key projections
-        ak_tensor = self.ak_proj.weight.view(self.k_rank * self.num_heads, -1)
-        bk_tensor = self.bk_proj.weight.view(self.k_rank * self.head_dim, -1)
         nn.init.xavier_uniform_(ak_tensor)
-        nn.init.xavier_uniform_(bk_tensor)
-        
-        # Initialize value projections
-        av_tensor = self.av_proj.weight.view(self.v_rank * self.num_heads, -1)
-        bv_tensor = self.bv_proj.weight.view(self.v_rank * self.head_dim, -1)
         nn.init.xavier_uniform_(av_tensor)
-        nn.init.xavier_uniform_(bv_tensor)
+        self.aq_proj.weight.data = aq_tensor.view_as(self.aq_proj.weight)
+        self.ak_proj.weight.data = ak_tensor.view_as(self.ak_proj.weight)
+        self.av_proj.weight.data = av_tensor.view_as(self.av_proj.weight)
 
+        bq_tensor = self.bq_proj.weight.view(dim, self.q_rank, self.head_dim)
+        bk_tensor = self.bk_proj.weight.view(dim, self.kv_rank, self.head_dim)
+        bv_tensor = self.bv_proj.weight.view(dim, self.kv_rank, self.head_dim)
+        nn.init.xavier_uniform_(bq_tensor)
+        nn.init.xavier_uniform_(bk_tensor)
+        nn.init.xavier_uniform_(bv_tensor)
+        self.bq_proj.weight.data = bq_tensor.view_as(self.bq_proj.weight)
+        self.bk_proj.weight.data = bk_tensor.view_as(self.bk_proj.weight)
+        self.bv_proj.weight.data = bv_tensor.view_as(self.bv_proj.weight)
+
+        
     def forward(self, x: Tensor, ve: Tensor | None):
         B, T = x.size(0), x.size(1)
         
@@ -480,16 +484,20 @@ def _load_data_shard(file: Path):
 def distributed_data_generator(filename_pattern: str, batch_size: int, rank : int, world_size : int, seq_len: int = 2048):
     files = sorted(Path.cwd().glob(filename_pattern))
     assert batch_size % world_size == 0
-    local_batch_size = batch_size // world_size
+
+    local_batch_size = int(batch_size // world_size)
     file_iter = iter(files) # use itertools.cycle(files) instead if you want to do multi-epoch training
     tokens, pos = _load_data_shard(next(file_iter)), 0
+
     while True:
         if pos + batch_size + 1 >= len(tokens):
             tokens, pos = _load_data_shard(next(file_iter)), 0
-        buf = tokens[pos + rank * local_batch_size:][:local_batch_size + 1]
+
+        start_idx = int(pos + rank * local_batch_size)
+        buf = tokens[start_idx:start_idx + local_batch_size + 1]
         # Reshape inputs and targets to (B, S) where B is batch size and S is sequence length
-        inputs = buf[:-1].view(local_batch_size // seq_len, seq_len)  # Reshape to (local_batch_size, seq_len)
-        targets = buf[1:].view(local_batch_size // seq_len, seq_len)  # Reshape to (local_batch_size, seq_len)
+        inputs = buf[:-1].view(-1, seq_len)  # Reshape to (local_batch_size, seq_len)
+        targets = buf[1:].view(-1, seq_len)  # Reshape to (local_batch_size, seq_len)
         inputs = inputs.to(device="cuda", dtype=torch.int32, non_blocking=True) # no sync on host side;
         targets = targets.to(device="cuda", dtype=torch.int64, non_blocking=True) # H2D in another stream isn"t helpful.
         pos += batch_size

@@ -75,7 +75,7 @@ class TensorProductAttention(nn.Module):
 
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        batch_size, seq_len, d_model = x.size()
+        batch_size, seq_len, _ = x.size()
 
         a_q = self.aq_proj(x).view(batch_size, seq_len, self.n_heads, self.q_rank)
         a_k = self.ak_proj(x).view(batch_size, seq_len, self.n_heads, self.k_rank)

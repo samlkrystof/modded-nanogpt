@@ -255,16 +255,16 @@ class Rotary(nn.Module):
         return torch.cat((y1, y2), 3).type_as(x_BTHD)
 
 class CausalSelfAttention(nn.Module):
-    def __init__(self, dim: int, num_heads: int, layer_idx: int):
+    def __init__(self, dim: int, num_heads: int, layer_idx: int, rope_dim: int = 32, q_dim: int = 512, kv_dim: int = 256):
         super().__init__()
         assert dim % num_heads == 0
         self.num_heads = num_heads
         self.head_dim = dim // num_heads
         
-        # Latent dimensions
-        self.kv_dim = dim // 2  # Reduced dimension for key/value
-        self.q_dim = dim // 2   # Reduced dimension for query
-        self.rope_dim = self.head_dim // 2  # Half dimension for rotary as in original
+        # Latent space dimensions
+        self.kv_dim = kv_dim
+        self.q_dim = q_dim
+        self.rope_dim = rope_dim
         
         # Initialize projections with improved init scale by @YouJiacheng
         std = 0.5 * (dim ** -0.5)
@@ -466,16 +466,20 @@ def _load_data_shard(file: Path):
 def distributed_data_generator(filename_pattern: str, batch_size: int, rank : int, world_size : int, seq_len: int = 2048):
     files = sorted(Path.cwd().glob(filename_pattern))
     assert batch_size % world_size == 0
-    local_batch_size = batch_size // world_size
+
+    local_batch_size = int(batch_size // world_size)
     file_iter = iter(files) # use itertools.cycle(files) instead if you want to do multi-epoch training
     tokens, pos = _load_data_shard(next(file_iter)), 0
+
     while True:
         if pos + batch_size + 1 >= len(tokens):
             tokens, pos = _load_data_shard(next(file_iter)), 0
-        buf = tokens[pos + rank * local_batch_size:][:local_batch_size + 1]
+
+        start_idx = int(pos + rank * local_batch_size)
+        buf = tokens[start_idx:start_idx + local_batch_size + 1]
         # Reshape inputs and targets to (B, S) where B is batch size and S is sequence length
-        inputs = buf[:-1].view(local_batch_size // seq_len, seq_len)  # Reshape to (local_batch_size, seq_len)
-        targets = buf[1:].view(local_batch_size // seq_len, seq_len)  # Reshape to (local_batch_size, seq_len)
+        inputs = buf[:-1].view(-1, seq_len)  # Reshape to (local_batch_size, seq_len)
+        targets = buf[1:].view(-1, seq_len)  # Reshape to (local_batch_size, seq_len)
         inputs = inputs.to(device="cuda", dtype=torch.int32, non_blocking=True) # no sync on host side;
         targets = targets.to(device="cuda", dtype=torch.int64, non_blocking=True) # H2D in another stream isn"t helpful.
         pos += batch_size
